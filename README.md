@@ -3,12 +3,9 @@
 **Customer Churn Prediction & Business Risk Scoring**
 
 Retention budgets in telecom are finite, and mis-targeted interventions directly translate into lost revenue.
-
 This project develops a churn prediction system that not only identifies high-risk customers, but also converts model predictions into concrete financial trade-offs.
+By evaluating Accuracy, F1-score, and AUC alongside False Negative and False Positive cost analysis, the project determines an optimal churn threshold that maximizes expected profit under real-world budget constraints. The pipeline deliver clear, quantitative evidence to guide retention investment and decision-making.
 
-By evaluating Accuracy, F1-score, and AUC alongside False Negative and False Positive cost analysis, the project determines an optimal churn threshold that maximizes expected profit under real-world budget constraints.
-
-The pipeline delivers clear, quantitative evidence to guide retention investment and decision-making.
 ---
 
 ## What It Does
@@ -103,5 +100,6 @@ Python · Pandas · NumPy · Scikit-learn · Matplotlib · Jupyter
 This project emphasizes **interpretability, reproducibility, and business relevance** over black-box optimization and is designed to be easily extended to dashboards or production scoring pipelines.
 
 ---
+
 
 
