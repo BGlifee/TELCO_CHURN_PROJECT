@@ -1,6 +1,6 @@
 # TELCO_CHURN_PROJECT
 <p align="center">
-  <img src="assets/dashboard_demo.jpg" width="900">
+  <img src="assets/dashboard_demo.jpg.gif" width="900">
 </p>
 
 **Customer Churn Prediction & Business Risk Scoring**
@@ -103,6 +103,7 @@ Python · Pandas · NumPy · Scikit-learn · Matplotlib · Jupyter
 This project emphasizes **interpretability, reproducibility, and business relevance** over black-box optimization and is designed to be easily extended to dashboards or production scoring pipelines.
 
 ---
+
 
 
 
