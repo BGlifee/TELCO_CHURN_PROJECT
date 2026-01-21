@@ -2,7 +2,9 @@
 Model training and evaluation utilities.
 - Builds a scikit-learn pipeline (ColumnTransformer + estimator)
 - Uses SMOTE (when imblearn is available) inside an imbalanced-learn Pipeline
-- Runs RandomizedSearchCV optimizing F1
+- Runs RandomizedSearchCV optimizing F1 for both RandomForest and LightGBM (separate searches)
+- Selects best estimator between the two
+- Calibrates the chosen estimator with CalibratedClassifierCV (isotonic)
 - Produces out-of-fold probabilities to tune decision threshold (maximize F1)
 - Saves basic evaluation plots (ROC, Precision-Recall)
 
@@ -24,6 +26,14 @@ from sklearn.metrics import (
     accuracy_score, f1_score, roc_auc_score, classification_report,
     roc_curve, precision_recall_curve, average_precision_score, confusion_matrix
 )
+from sklearn.calibration import CalibratedClassifierCV
+
+# Optional LightGBM
+try:
+    import lightgbm as lgb
+    LGB_AVAILABLE = True
+except Exception:
+    LGB_AVAILABLE = False
 
 # imbalanced-learn is optional; we prefer SMOTE in-pipeline when available
 try:
@@ -39,13 +49,32 @@ def _ensure_dir(d: Path):
     d.mkdir(parents=True, exist_ok=True)
     return d
 
+def _random_search_for_estimator(pipe, param_distributions, X_train, y_train, cv, n_iter, random_state):
+    rs = RandomizedSearchCV(
+        estimator=pipe,
+        param_distributions=param_distributions,
+        n_iter=n_iter,
+        scoring='f1',
+        cv=cv,
+        verbose=1,
+        n_jobs=-1,
+        random_state=random_state
+    )
+    rs.fit(X_train, y_train)
+    return rs
+
 def train_and_evaluate(X_train: pd.DataFrame,
                        X_test: pd.DataFrame,
                        y_train: pd.Series,
                        y_test: pd.Series,
                        save_dir: str | Path = 'results/graphs',
                        random_state: int = 42,
-                       n_iter: int = 20):
+                       n_iter: int = 40):
+    """Train models (RF and LightGBM), calibrate best estimator, tune threshold, and evaluate.
+
+    Returns:
+        best_trained_model, test_predictions, test_probabilities, best_threshold
+    """
     save_dir = _ensure_dir(Path(save_dir))
 
     # Identify numeric and categorical columns
@@ -61,47 +90,86 @@ def train_and_evaluate(X_train: pd.DataFrame,
         ('cat', cat_pipe, categorical_cols)
     ])
 
-    # Base classifier
-    clf = RandomForestClassifier(random_state=random_state, n_jobs=-1)
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
 
-    # Pipeline (with or without SMOTE)
+    # ---- Random Forest search ----
+    rf_clf = RandomForestClassifier(random_state=random_state, n_jobs=-1)
     if IMBLEARN_AVAILABLE:
-        pipe = ImbPipeline([('preproc', preproc), ('smote', SMOTE(random_state=random_state)), ('clf', clf)])
+        rf_pipe = ImbPipeline([('preproc', preproc), ('smote', SMOTE(random_state=random_state)), ('clf', rf_clf)])
     else:
-        pipe = SKPipeline([('preproc', preproc), ('clf', clf)])
+        rf_pipe = SKPipeline([('preproc', preproc), ('clf', rf_clf)])
 
-    # Parameter grid for RandomizedSearchCV
-    param_distributions = {
+    rf_params = {
         'clf__n_estimators': [200, 400, 800],
         'clf__max_depth': [6, 12, 20, None],
         'clf__min_samples_split': [2, 5, 10]
     }
     if IMBLEARN_AVAILABLE:
-        param_distributions['smote__sampling_strategy'] = [0.5, 0.7, 0.9]
+        rf_params['smote__sampling_strategy'] = [0.5, 0.7, 0.9]
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+    print('\nRunning Random Forest randomized search...')
+    rs_rf = _random_search_for_estimator(rf_pipe, rf_params, X_train, y_train, cv, n_iter // 2, random_state)
 
-    rs = RandomizedSearchCV(
-        estimator=pipe,
-        param_distributions=param_distributions,
-        n_iter=n_iter,
-        scoring='f1',
-        cv=cv,
-        verbose=1,
-        n_jobs=-1,
-        random_state=random_state
-    )
+    # ---- LightGBM search (if available) ----
+    rs_lgb = None
+    if LGB_AVAILABLE:
+        lgb_clf = lgb.LGBMClassifier(random_state=random_state, n_jobs=-1)
+        if IMBLEARN_AVAILABLE:
+            lgb_pipe = ImbPipeline([('preproc', preproc), ('smote', SMOTE(random_state=random_state)), ('clf', lgb_clf)])
+        else:
+            lgb_pipe = SKPipeline([('preproc', preproc), ('clf', lgb_clf)])
 
-    rs.fit(X_train, y_train)
+        lgb_params = {
+            'clf__n_estimators': [200, 400, 800],
+            'clf__learning_rate': [0.01, 0.03, 0.05, 0.1],
+            'clf__num_leaves': [31, 50, 100],
+            'clf__max_depth': [-1, 6, 12, 20]
+        }
+        if IMBLEARN_AVAILABLE:
+            lgb_params['smote__sampling_strategy'] = [0.5, 0.7, 0.9]
 
-    best_model = rs.best_estimator_
+        print('\nRunning LightGBM randomized search...')
+        rs_lgb = _random_search_for_estimator(lgb_pipe, lgb_params, X_train, y_train, cv, n_iter // 2, random_state)
+    else:
+        print('\nLightGBM not available in environment; skipping LGB search.')
+
+    # Choose best between RF and LGB (compare best CV F1)
+    best_estimator = rs_rf.best_estimator_
+    best_cv_score = rs_rf.best_score_
+    chosen = 'random_forest'
+    best_params = rs_rf.best_params_
+
+    if rs_lgb is not None and rs_lgb.best_score_ > best_cv_score:
+        best_estimator = rs_lgb.best_estimator_
+        best_cv_score = rs_lgb.best_score_
+        chosen = 'lightgbm'
+        best_params = rs_lgb.best_params_
+
+    print(f"\nChosen model: {chosen} with CV F1 = {best_cv_score:.4f}")
+    print('Best params:', best_params)
+
+    # Calibrate the chosen estimator for better probabilities
+    try:
+        calibrated = CalibratedClassifierCV(best_estimator, cv=cv, method='isotonic')
+        calibrated.fit(X_train, y_train)
+        final_model = calibrated
+        calibrated_flag = True
+    except Exception as e:
+        print('Calibration failed or not supported; using uncalibrated model. Error:', e)
+        # Refit best_estimator on full training data (it may already be refit by RandomizedSearchCV)
+        try:
+            best_estimator.fit(X_train, y_train)
+        except Exception:
+            pass
+        final_model = best_estimator
+        calibrated_flag = False
 
     # Out-of-fold probabilities on training set for reliable threshold tuning
     try:
-        oof_probs = cross_val_predict(best_model, X_train, y_train, cv=cv, method='predict_proba', n_jobs=-1)[:, 1]
+        oof_probs = cross_val_predict(final_model, X_train, y_train, cv=cv, method='predict_proba', n_jobs=-1)[:, 1]
     except Exception:
         # Fallback: use predict_proba on training data (less reliable)
-        oof_probs = best_model.predict_proba(X_train)[:, 1]
+        oof_probs = final_model.predict_proba(X_train)[:, 1]
 
     # Find threshold that maximizes F1 on OOF predictions
     thresholds = np.linspace(0.0, 1.0, 101)
@@ -109,7 +177,7 @@ def train_and_evaluate(X_train: pd.DataFrame,
     best_t = float(thresholds[int(np.argmax(f1s))])
 
     # Evaluate on test set
-    test_probs = best_model.predict_proba(X_test)[:, 1]
+    test_probs = final_model.predict_proba(X_test)[:, 1]
     test_preds = (test_probs >= best_t).astype(int)
 
     acc = accuracy_score(y_test, test_preds)
@@ -117,6 +185,8 @@ def train_and_evaluate(X_train: pd.DataFrame,
     roc = roc_auc_score(y_test, test_probs)
 
     print('\nModel Performance (with tuned threshold)')
+    print('Chosen model:', chosen)
+    print('Calibrated probabilities:' , calibrated_flag)
     print('Best threshold:', best_t)
     print('Accuracy: {:.4f}'.format(acc))
     print('F1 Score: {:.4f}'.format(f1))
@@ -172,13 +242,17 @@ def train_and_evaluate(X_train: pd.DataFrame,
 
     # Save training metadata
     metadata = {
-        'best_params': rs.best_params_,
-        'best_cv_score_f1': rs.best_score_,
+        'chosen_model': chosen,
+        'lgb_available': LGB_AVAILABLE,
+        'imblearn_available': IMBLEARN_AVAILABLE,
+        'best_params': best_params,
+        'best_cv_score_f1': best_cv_score,
         'best_threshold': best_t,
         'test_accuracy': acc,
         'test_f1': f1,
-        'test_roc_auc': roc
+        'test_roc_auc': roc,
+        'calibrated': calibrated_flag
     }
     pd.Series(metadata).to_json(os.path.join(save_dir, 'train_metadata.json'))
 
-    return best_model, test_preds, test_probs, best_t
+    return final_model, test_preds, test_probs, best_t
