@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Data & results (keep only small sample files in Git)
+data/raw/
+data/*.parquet
+data/*.npy
+data/*.pkl
+
+results/
+!results/.gitkeep   # optional placeholder
+
+# ML / experiments
+mlruns/
+logs/
+*.log
+
+# Credentials (if any)
+*.env
+.env.*
+config.toml

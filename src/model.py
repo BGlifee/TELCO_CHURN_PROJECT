@@ -83,7 +83,10 @@ def train_and_evaluate(X_train: pd.DataFrame,
 
     # Preprocessing
     num_pipe = StandardScaler()
-    cat_pipe = OneHotEncoder(handle_unknown='ignore', sparse=False)
+    try :
+        cat_pipe = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+    except TypeError:
+        cat_pipe = OneHotEncoder(handle_unknown='ignore', sparse=False)
 
     preproc = ColumnTransformer([
         ('num', num_pipe, numeric_cols),
