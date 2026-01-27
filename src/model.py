@@ -163,7 +163,7 @@ def train_and_evaluate(X_train: pd.DataFrame,
         try:
             best_estimator.fit(X_train, y_train)
         except Exception:
-            pass
+            pass   
         final_model = best_estimator
         calibrated_flag = False
 
